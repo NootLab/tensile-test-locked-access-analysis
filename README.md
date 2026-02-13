@@ -8,4 +8,5 @@ How to use:
 1. Copy column data in manageable chunks
 2. Stitch together data from multiple Access files (if necessary)
 3. Paste into the relevant fields of the GUI 
-4. Process and visualize without needing full database access
+4. Process and visualize relevant charts 
+5. Export as .csv 
