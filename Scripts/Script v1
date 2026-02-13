@@ -1,0 +1,287 @@
+import tkinter as tk
+from tkinter import filedialog, scrolledtext, messagebox, ttk
+import matplotlib.pyplot as plt
+import csv
+import nbformat
+from nbformat.v4 import new_notebook, new_code_cell, new_markdown_cell
+
+class DataCollector:
+    def __init__(self):
+        self.columns = ["TestNo", "PlayTime", "LoadValue", "PositionValue"]
+        self.data = {col: [] for col in self.columns}
+        self.areas = {}  # TestNo -> area
+
+    def add_chunk(self, col, chunk):
+        lines = [line.strip() for line in chunk.splitlines() if line.strip()]
+        self.data[col].extend(lines)
+        return len(lines)
+
+    def ready(self):
+        lengths = [len(self.data[col]) for col in self.columns]
+        return all(length == lengths[0] and length > 0 for length in lengths)
+
+    def get_unique_testnos(self):
+        return sorted(set(self.data["TestNo"]))
+
+class AreaPrompt(tk.Toplevel):
+    def __init__(self, parent, testnos, callback):
+        super().__init__(parent)
+        self.title("Enter Cross-Sectional Area for Each TestNo")
+        self.callback = callback
+        self.entries = {}
+        tk.Label(self, text="Please enter cross-sectional area (mm²) for each TestNo:").pack()
+        frm = tk.Frame(self)
+        frm.pack()
+        for testno in testnos:
+            row = tk.Frame(frm)
+            row.pack(fill='x')
+            tk.Label(row, text=f"TestNo {testno}:", width=15, anchor='w').pack(side='left')
+            entry = tk.Entry(row, width=15)
+            entry.pack(side='left')
+            self.entries[testno] = entry
+        btn = tk.Button(self, text="Submit", command=self.submit)
+        btn.pack(pady=10)
+
+    def submit(self):
+        areas = {}
+        try:
+            for testno, entry in self.entries.items():
+                val = float(entry.get())
+                areas[testno] = val
+            self.callback(areas)
+            self.destroy()
+        except ValueError:
+            messagebox.showerror("Input Error", "Please enter valid numeric values for all areas.")
+
+class TensileStrengthGUI:
+    def __init__(self, root):
+        self.root = root
+        root.title("Tensile Strength Data Collector (Enhanced)")
+        self.collector = DataCollector()
+        self.processed_rows = []  # Save processed rows for exporting
+
+        # Column selector
+        self.col_var = tk.StringVar(value="TestNo")
+        self.col_selector = ttk.Combobox(root, values=self.collector.columns, textvariable=self.col_var, state="readonly")
+        self.col_selector.pack()
+        self.col_selector.bind("<<ComboboxSelected>>", self.update_chunk_count)
+
+        self.label = tk.Label(root, text="Paste chunk for selected column:")
+        self.label.pack()
+
+        self.textbox = scrolledtext.ScrolledText(root, width=80, height=10)
+        self.textbox.pack()
+
+        self.btn_add = tk.Button(root, text="Add Chunk to Selected Column", command=self.add_chunk)
+        self.btn_add.pack()
+
+        self.chunk_count_label = tk.Label(root, text=self.get_column_count_text())
+        self.chunk_count_label.pack()
+
+        self.btn_finish = tk.Button(root, text="Finish & Calculate", command=self.finish)
+        self.btn_finish.pack()
+
+        self.result_text = scrolledtext.ScrolledText(root, width=100, height=20)
+        self.result_text.pack()
+        self.result_text.config(state=tk.DISABLED)
+
+        # TestNo Viewer
+        tk.Label(root, text="View Data for Individual TestNo:").pack()
+        self.testno_var = tk.StringVar()
+        self.testno_selector = ttk.Combobox(root, textvariable=self.testno_var, state="readonly")
+        self.testno_selector.pack()
+        self.btn_view_test = tk.Button(root, text="View Selected TestNo", command=self.view_testno)
+        self.btn_view_test.pack()
+
+        # Save/export buttons
+        self.btn_save_csv = tk.Button(root, text="Save All Data to CSV", command=self.save_csv)
+        self.btn_save_csv.pack()
+        self.btn_save_ipynb = tk.Button(root, text="Export Jupyter Notebook", command=self.save_ipynb)
+        self.btn_save_ipynb.pack()
+
+    def get_column_count_text(self):
+        text = ""
+        for col in self.collector.columns:
+            text += f"{col}: {len(self.collector.data[col])} records.  "
+        return text.strip()
+
+    def update_chunk_count(self, event=None):
+        self.chunk_count_label.config(text=self.get_column_count_text())
+
+    def add_chunk(self):
+        col = self.col_var.get()
+        chunk = self.textbox.get("1.0", tk.END)
+        count = self.collector.add_chunk(col, chunk)
+        self.textbox.delete("1.0", tk.END)
+        self.update_chunk_count()
+        messagebox.showinfo("Chunk Added", f"Added {count} values to {col}.")
+
+    def finish(self):
+        if not self.collector.ready():
+            messagebox.showerror("Error", "Not all columns have the same number of records. Please check your data.")
+            return
+        unique_testnos = self.collector.get_unique_testnos()
+        AreaPrompt(self.root, unique_testnos, self.areas_callback)
+
+    def areas_callback(self, areas):
+        self.collector.areas = areas
+        # Save processed data for export
+        self.processed_rows = []
+        n = len(self.collector.data["TestNo"])
+        tensile_strengths = []
+        playtimes = []
+        for i in range(n):
+            testno = self.collector.data["TestNo"][i]
+            playtime = float(self.collector.data["PlayTime"][i])
+            load = float(self.collector.data["LoadValue"][i])
+            position = self.collector.data["PositionValue"][i]
+            area = areas.get(testno)
+            if area is not None:
+                tensile_strength = load / area
+                self.processed_rows.append([testno, playtime, load, position, area, tensile_strength])
+                tensile_strengths.append(tensile_strength)
+                playtimes.append(playtime)
+        # Update TestNo dropdown
+        self.testno_selector['values'] = sorted(set(row[0] for row in self.processed_rows))
+        self.testno_var.set('')
+        # Display all results
+        self.result_text.config(state=tk.NORMAL)
+        self.result_text.delete("1.0", tk.END)
+        result = "TestNo\tPlayTime\tLoadValue\tPositionValue\tArea_mm2\tTensileStrength_MPa\n"
+        for row in self.processed_rows:
+            result += f"{row[0]}\t{row[1]}\t{row[2]}\t{row[3]}\t{row[4]}\t{row[5]:.2f}\n"
+        max_strength = max((row[5] for row in self.processed_rows), default=None)
+        if max_strength is not None:
+            result += f"\nMAX Tensile Strength: {max_strength:.2f} MPa\n"
+        self.result_text.insert(tk.END, result)
+        self.result_text.config(state=tk.DISABLED)
+        # Plot all data with max annotation
+        if tensile_strengths:
+            sample_size = min(2000, len(tensile_strengths))
+            sample_tensile = tensile_strengths[:sample_size]
+            sample_playtime = playtimes[:sample_size]
+            max_strength_val = max(sample_tensile)
+            max_idx = sample_tensile.index(max_strength_val)
+            max_playtime_val = sample_playtime[max_idx]
+            plt.figure(figsize=(10,6))
+            plt.plot(sample_playtime, sample_tensile, marker='.', linestyle='-', color='b')
+            plt.scatter([max_playtime_val], [max_strength_val], color='r', zorder=5)
+            plt.annotate(
+                f'Max: {max_strength_val:.2f} MPa',
+                xy=(max_playtime_val, max_strength_val),
+                xytext=(max_playtime_val, max_strength_val + 0.05 * max_strength_val),
+                arrowprops=dict(facecolor='red', shrink=0.05),
+                fontsize=12,
+                color='red'
+            )
+            plt.title('Tensile Strength vs PlayTime (sample)')
+            plt.xlabel('PlayTime')
+            plt.ylabel('Tensile Strength (MPa)')
+            plt.grid(True)
+            plt.show()
+
+    def view_testno(self):
+        testno = self.testno_var.get()
+        if not testno:
+            messagebox.showwarning("No TestNo Selected", "Please select a TestNo to view.")
+            return
+        rows = [row for row in self.processed_rows if row[0] == testno]
+        if not rows:
+            messagebox.showinfo("TestNo Not Found", f"No data found for TestNo {testno}.")
+            return
+        info = "TestNo\tPlayTime\tLoadValue\tPositionValue\tArea_mm2\tTensileStrength_MPa\n"
+        playtimes = []
+        tensile_strengths = []
+        for row in rows:
+            info += f"{row[0]}\t{row[1]}\t{row[2]}\t{row[3]}\t{row[4]}\t{row[5]:.2f}\n"
+            playtimes.append(row[1])
+            tensile_strengths.append(row[5])
+        max_strength = max((row[5] for row in rows), default=None)
+        if max_strength is not None:
+            info += f"\nMAX Tensile Strength for TestNo {testno}: {max_strength:.2f} MPa\n"
+        # Show popup and plot with annotation
+        messagebox.showinfo(f"Data for TestNo {testno}", info)
+        if tensile_strengths:
+            max_strength_val = max(tensile_strengths)
+            max_idx = tensile_strengths.index(max_strength_val)
+            max_playtime_val = playtimes[max_idx]
+            plt.figure(figsize=(8,5))
+            plt.plot(playtimes, tensile_strengths, marker='o', linestyle='-', color='g')
+            plt.scatter([max_playtime_val], [max_strength_val], color='r', zorder=5)
+            plt.annotate(
+                f'Max: {max_strength_val:.2f} MPa',
+                xy=(max_playtime_val, max_strength_val),
+                xytext=(max_playtime_val, max_strength_val + 0.05 * max_strength_val),
+                arrowprops=dict(facecolor='red', shrink=0.05),
+                fontsize=12,
+                color='red'
+            )
+            plt.title(f'Tensile Strength vs PlayTime for TestNo {testno}')
+            plt.xlabel('PlayTime')
+            plt.ylabel('Tensile Strength (MPa)')
+            plt.grid(True)
+            plt.show()
+
+    def save_csv(self):
+        if not self.processed_rows:
+            messagebox.showerror("No Data", "No data to save. Please process your data first.")
+            return
+        file_path = filedialog.asksaveasfilename(defaultextension='.csv', filetypes=[("CSV files", "*.csv")])
+        if not file_path:
+            return
+        with open(file_path, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(["TestNo", "PlayTime", "LoadValue", "PositionValue", "Area_mm2", "TensileStrength_MPa"])
+            for row in self.processed_rows:
+                writer.writerow([row[0], row[1], row[2], row[3], row[4], f"{row[5]:.2f}"])
+        messagebox.showinfo("Saved", f"All data saved to {file_path}")
+
+    def save_ipynb(self):
+        if not self.processed_rows:
+            messagebox.showerror("No Data", "No data to save. Please process your data first.")
+            return
+        file_path = filedialog.asksaveasfilename(defaultextension='.ipynb', filetypes=[("Jupyter Notebook", "*.ipynb")])
+        if not file_path:
+            return
+        nb = new_notebook()
+        # Markdown overview
+        nb.cells.append(new_markdown_cell("# Tensile Strength Data\nThis notebook contains your processed tensile strength data and a plot."))
+        # Code for data
+        code = "import pandas as pd\nimport matplotlib.pyplot as plt\n"
+        code += "data = pd.DataFrame([\n"
+        for row in self.processed_rows:
+            code += f"    {row},\n"
+        code += "], columns=['TestNo', 'PlayTime', 'LoadValue', 'PositionValue', 'Area_mm2', 'TensileStrength_MPa'])\n"
+        code += "data.head()\n"
+        nb.cells.append(new_code_cell(code))
+        # Code for plot with max annotation
+        plot_code = (
+            "plt.figure(figsize=(10,6))\n"
+            "plt.plot(data['PlayTime'], data['TensileStrength_MPa'], marker='.', linestyle='-', color='b')\n"
+            "max_strength = data['TensileStrength_MPa'].max()\n"
+            "max_idx = data['TensileStrength_MPa'].idxmax()\n"
+            "max_playtime = data.loc[max_idx, 'PlayTime']\n"
+            "plt.scatter([max_playtime], [max_strength], color='r', zorder=5)\n"
+            "plt.annotate(\n"
+            "    f'Max: {max_strength:.2f} MPa',\n"
+            "    xy=(max_playtime, max_strength),\n"
+            "    xytext=(max_playtime, max_strength + 0.05 * max_strength),\n"
+            "    arrowprops=dict(facecolor='red', shrink=0.05),\n"
+            "    fontsize=12,\n"
+            "    color='red'\n"
+            ")\n"
+            "plt.title('Tensile Strength vs PlayTime')\n"
+            "plt.xlabel('PlayTime')\n"
+            "plt.ylabel('Tensile Strength (MPa)')\n"
+            "plt.grid(True)\n"
+            "plt.show()\n"
+        )
+        nb.cells.append(new_code_cell(plot_code))
+        with open(file_path, 'w', encoding='utf-8') as f:
+            nbformat.write(nb, f)
+        messagebox.showinfo("Saved", f"Notebook exported to {file_path}")
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = TensileStrengthGUI(root)
+    root.mainloop()
